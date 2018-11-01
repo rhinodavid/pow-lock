@@ -1,11 +1,13 @@
 #include "EEPROM.h"
 #include "mbedtls/md.h"
 #include <WiFi.h>
+#include "secrets.h"
 
 #define EEPROM_SIZE 256
 #define BASE_SIZE 8
 #define ADDR 0
 #define PORT_NUMBER 6969 // for server
+#define MAX_INPUT 16     // tcp message max length
 
 byte randomValue;
 char letter;
@@ -18,6 +20,7 @@ mbedtls_md_context_t ctx;
 mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
 
 WiFiServer wifiServer(PORT_NUMBER);
+WiFiClient client;
 
 void setup()
 {
@@ -36,15 +39,14 @@ void setup()
   delay(100);
 
   // WiFi
+  Serial.println("Starting up wifi");
   WiFi.begin(ssid, password);
-
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(1000);
     Serial.println("Connecting to WiFi..");
   }
-
-  Serial.println("Connected to the WiFi network");
+  Serial.print("Connected to the WiFi network with IP: ");
   Serial.println(WiFi.localIP());
 
   wifiServer.begin();
@@ -63,6 +65,73 @@ void setup()
 }
 void loop()
 {
+  check_client_input();
+}
+
+// Networking
+void check_client_input()
+{
+  client = wifiServer.available();
+
+  if (client)
+  {
+    while (client.connected())
+    {
+      while (client.available() > 0)
+      {
+        processIncomingByte(client.read());
+      }
+      delay(10);
+    }
+    client.stop();
+    Serial.println("Client disconnected");
+  }
+}
+
+// from: http://www.gammon.com.au/serial
+void process_data(const char *data)
+{
+  // for now just display it
+  // (but you could compare it to some value, convert to an integer, etc.)
+  Serial.println(data);
+}
+
+// from: http://www.gammon.com.au/serial
+void processIncomingByte(const byte inByte)
+{
+  static char input_line[MAX_INPUT];
+  static unsigned int input_pos = 0;
+
+  switch (inByte)
+  {
+  case '\n':                   // end of text
+    input_line[input_pos] = 0; // terminating null byte
+    // terminator reached! process input_line here ...
+    process_data(input_line);
+    // reset buffer for next time
+    input_pos = 0;
+    break;
+
+  case '\r': // discard carriage return
+    break;
+
+  default:
+    // keep adding if not full ... allow for terminating null byte
+    if (input_pos < (MAX_INPUT - 1))
+      input_line[input_pos++] = inByte;
+    break;
+  }
+
+  // switch (inByte)
+  // {
+  // case 'F':
+  // case 'f':
+  //   client.println("flash!");
+  //   break;
+  // default:
+  //   break;
+  // }
+  // return client;
 }
 
 // HASHING
