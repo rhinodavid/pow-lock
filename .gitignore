@@ -1,0 +1,7 @@
+*.iml
+.idea
+.DS_Store
+.directory
+secrets.h
+*.code-workspace
+.vscode/*
