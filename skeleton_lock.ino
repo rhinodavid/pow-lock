@@ -9,9 +9,10 @@
 #define PORT_NUMBER 6969 // for server
 #define MAX_INPUT 66     // tcp message max length [command][target in hex (64)][\0]
 
-#define RESET_SWITCH_PIN 1
-#define OPEN_SWITCH_PIN 2
-#define LATCH_PIN 3
+#define BUILT_IN_LED 2
+#define RESET_SWITCH_PIN 36
+#define OPEN_SWITCH_PIN 39
+#define LATCH_PIN 23
 
 bool openPressed = false;
 bool resetPressed = false;
@@ -62,6 +63,8 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(OPEN_SWITCH_PIN), handle_open_inturrupt, LOW);
   pinMode(LATCH_PIN, OUTPUT);
   digitalWrite(LATCH_PIN, LOW);
+  pinMode(BUILT_IN_LED, OUTPUT);
+  digitalWrite(BUILT_IN_LED, LOW);
 
   // WiFi
   Serial.println("Starting up wifi");
@@ -94,6 +97,7 @@ void setup()
 }
 void loop()
 {
+  update_status_led();
   check_open_pressed();
   check_reset_pressed();
   check_client_input();
@@ -156,6 +160,18 @@ void open()
   digitalWrite(LATCH_PIN, HIGH);
   delay(500);
   digitalWrite(LATCH_PIN, LOW);
+}
+
+void update_status_led()
+{
+  if (status == UNLOCKED)
+  {
+    digitalWrite(BUILT_IN_LED, HIGH);
+  }
+  else
+  {
+    digitalWrite(BUILT_IN_LED, LOW);
+  }
 }
 
 void zeroize_target()
