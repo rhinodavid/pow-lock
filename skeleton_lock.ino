@@ -9,14 +9,20 @@
 #define PORT_NUMBER 6969 // for server
 #define MAX_INPUT 66     // tcp message max length [command][target in hex (64)][\0]
 
-byte randomValue;
-char letter;
-char base[BASE_SIZE + 1];
-byte shaResult[32];
-byte target[32];
+#define RESET_SWITCH_PIN 1
+#define OPEN_SWITCH_PIN 2
+#define LATCH_PIN 3
+
+bool openPressed = false;
+bool resetPressed = false;
 byte nonceBytes[4];
 byte payload[BASE_SIZE + 4];
-// unsigned int nonce = 0;
+byte randomValue;
+byte shaResult[32];
+byte target[32];
+char base[BASE_SIZE + 1];
+char letter;
+
 mbedtls_md_context_t ctx;
 mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
 
@@ -47,6 +53,15 @@ void setup()
     delay(1000000);
   }
   delay(100);
+
+  // GPIO
+
+  pinMode(RESET_SWITCH_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(RESET_SWITCH_PIN), handle_reset_inturrupt, LOW);
+  pinMode(OPEN_SWITCH_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(OPEN_SWITCH_PIN), handle_open_inturrupt, LOW);
+  pinMode(LATCH_PIN, OUTPUT);
+  digitalWrite(LATCH_PIN, LOW);
 
   // WiFi
   Serial.println("Starting up wifi");
@@ -79,7 +94,48 @@ void setup()
 }
 void loop()
 {
+  check_open_pressed();
+  check_reset_pressed();
   check_client_input();
+}
+
+// Inturrputs
+
+void handle_reset_inturrupt()
+{
+  resetPressed = true;
+}
+
+void handle_open_inturrupt()
+{
+  openPressed = true;
+}
+
+void check_open_pressed()
+{
+  if (openPressed)
+  {
+    openPressed = false;
+    if (status == UNLOCKED)
+    {
+      Serial.println("Open button pressed; opening");
+      open();
+    }
+    else
+    {
+      Serial.println("Open button pressed while locked");
+    }
+  }
+}
+
+void check_reset_pressed()
+{
+  if (resetPressed)
+  {
+    resetPressed = false;
+    Serial.println("Reset button pressed; unlocking/resetting");
+    unlock();
+  }
 }
 
 // Business
@@ -92,6 +148,14 @@ void unlock()
   save_target();
   status = UNLOCKED;
   Serial.println("Unlocked...");
+}
+
+void open()
+{
+  Serial.println("Opening");
+  digitalWrite(LATCH_PIN, HIGH);
+  delay(500);
+  digitalWrite(LATCH_PIN, LOW);
 }
 
 void zeroize_target()
@@ -207,8 +271,7 @@ void process_data(const char *data)
     Serial.println("Open");
     if (status == UNLOCKED)
     {
-      // enagage latch gpio
-      client.println("1");
+      open();
     }
     else
     {
