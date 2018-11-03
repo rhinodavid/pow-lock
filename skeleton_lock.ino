@@ -10,12 +10,13 @@
 #define MAX_INPUT 66     // tcp message max length [command][target in hex (64)][\0]
 
 #define BUILT_IN_LED 2
-#define RESET_SWITCH_PIN 36
-#define OPEN_SWITCH_PIN 39
-#define LATCH_PIN 23
+#define RESET_SWITCH_PIN 12
+#define OPEN_SWITCH_PIN 14
+#define LATCH_PIN_1 5
+#define LATCH_PIN_2 18 // using two since one isn't switching the relay on
 
-bool openPressed = false;
-bool resetPressed = false;
+static volatile bool openPressed = false;
+static volatile bool resetPressed = false;
 byte nonceBytes[4];
 byte payload[BASE_SIZE + 4];
 byte randomValue;
@@ -39,6 +40,18 @@ enum Status
 
 Status status = UNKNOWN;
 
+// Interrupt handlers
+
+void IRAM_ATTR handle_reset_interrupt()
+{
+  resetPressed = true;
+}
+
+void IRAM_ATTR handle_open_interrupt()
+{
+  openPressed = true;
+}
+
 void setup()
 {
   randomSeed(analogRead(0));
@@ -58,11 +71,13 @@ void setup()
   // GPIO
 
   pinMode(RESET_SWITCH_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(RESET_SWITCH_PIN), handle_reset_inturrupt, LOW);
+  attachInterrupt(digitalPinToInterrupt(RESET_SWITCH_PIN), handle_reset_interrupt, FALLING);
   pinMode(OPEN_SWITCH_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(OPEN_SWITCH_PIN), handle_open_inturrupt, LOW);
-  pinMode(LATCH_PIN, OUTPUT);
-  digitalWrite(LATCH_PIN, LOW);
+  attachInterrupt(digitalPinToInterrupt(OPEN_SWITCH_PIN), handle_open_interrupt, FALLING);
+  pinMode(LATCH_PIN_1, OUTPUT);
+  digitalWrite(LATCH_PIN_1, LOW);
+  pinMode(LATCH_PIN_2, OUTPUT);
+  digitalWrite(LATCH_PIN_2, LOW);
   pinMode(BUILT_IN_LED, OUTPUT);
   digitalWrite(BUILT_IN_LED, LOW);
 
@@ -71,7 +86,7 @@ void setup()
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED)
   {
-    delay(1000);
+    delay(10000);
     Serial.println("Connecting to WiFi..");
   }
   Serial.print("Connected to the WiFi network with IP: ");
@@ -95,24 +110,13 @@ void setup()
   }
   Serial.println("Setup complete");
 }
+
 void loop()
 {
   update_status_led();
   check_open_pressed();
   check_reset_pressed();
   check_client_input();
-}
-
-// Inturrputs
-
-void handle_reset_inturrupt()
-{
-  resetPressed = true;
-}
-
-void handle_open_inturrupt()
-{
-  openPressed = true;
 }
 
 void check_open_pressed()
@@ -156,10 +160,13 @@ void unlock()
 
 void open()
 {
-  Serial.println("Opening");
-  digitalWrite(LATCH_PIN, HIGH);
-  delay(500);
-  digitalWrite(LATCH_PIN, LOW);
+  digitalWrite(LATCH_PIN_1, HIGH);
+  digitalWrite(LATCH_PIN_2, HIGH);
+  digitalWrite(BUILT_IN_LED, LOW);
+  delay(200);
+  digitalWrite(BUILT_IN_LED, HIGH);
+  digitalWrite(LATCH_PIN_1, LOW);
+  digitalWrite(LATCH_PIN_2, LOW);
 }
 
 void update_status_led()
@@ -287,6 +294,7 @@ void process_data(const char *data)
     Serial.println("Open");
     if (status == UNLOCKED)
     {
+      client.println("1");
       open();
     }
     else
