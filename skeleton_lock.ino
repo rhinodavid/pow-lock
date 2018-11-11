@@ -5,15 +5,15 @@
 
 #define EEPROM_SIZE 256
 #define BASE_SIZE 32
-#define ADDR 0           // address to save target; base will be saved + 32
-#define PORT_NUMBER 6969 // for server
-#define MAX_INPUT 66     // tcp message max length [command][target in hex (64)][\0]
+#define ADDR 0                      // address to save target; base will be saved + 32
+#define PORT_NUMBER 6969            // for server
+#define MAX_INPUT 66                // tcp message max length [command][target in hex (64)][\0]
+#define LATCH_ACTUATION_TIME_MS 125 // how long the latch pin is energized when opening
 
-#define BUILT_IN_LED 2
-#define RESET_SWITCH_PIN 12
-#define OPEN_SWITCH_PIN 14
-#define LATCH_PIN_1 5
-#define LATCH_PIN_2 18 // using two since one isn't switching the relay on
+#define INDICATOR_LED_PIN 21
+#define RESET_SWITCH_PIN 27
+#define OPEN_SWITCH_PIN 19
+#define LATCH_PIN 9
 
 static volatile bool openPressed = false;
 static volatile bool resetPressed = false;
@@ -74,22 +74,23 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(RESET_SWITCH_PIN), handle_reset_interrupt, FALLING);
   pinMode(OPEN_SWITCH_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(OPEN_SWITCH_PIN), handle_open_interrupt, FALLING);
-  pinMode(LATCH_PIN_1, OUTPUT);
-  digitalWrite(LATCH_PIN_1, LOW);
-  pinMode(LATCH_PIN_2, OUTPUT);
-  digitalWrite(LATCH_PIN_2, LOW);
-  pinMode(BUILT_IN_LED, OUTPUT);
-  digitalWrite(BUILT_IN_LED, LOW);
+  pinMode(LATCH_PIN, OUTPUT);
+  digitalWrite(LATCH_PIN, LOW);
+  pinMode(INDICATOR_LED_PIN, OUTPUT);
+  digitalWrite(INDICATOR_LED_PIN, LOW);
 
   // WiFi
   Serial.println("Starting up wifi");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED)
   {
-    delay(10000);
+    delay(1000);
+    flash_indicator_led_high_low(/* times= */ 2, /* delay_ms= */ 200);
+    delay(8000);
     Serial.println("Connecting to WiFi..");
   }
   Serial.print("Connected to the WiFi network with IP: ");
+  flash_indicator_led_high_low(/* times= */ 1, /* delay_ms= */ 500);
   Serial.println(WiFi.localIP());
 
   wifiServer.begin();
@@ -108,6 +109,8 @@ void setup()
     status = LOCKED;
     Serial.println("Starting Locked");
   }
+
+  flash_indicator_led_high_low(/* times= */ 10, /* delay_ms= */ 32);
   Serial.println("Setup complete");
 }
 
@@ -150,6 +153,7 @@ void check_reset_pressed()
 void unlock()
 {
   Serial.println("Unlocking...");
+  flash_indicator_led_high_low(/* times= */ 7, /* delay_ms= */ 50);
   zeroize_base();
   save_base();
   zeroize_target();
@@ -160,24 +164,22 @@ void unlock()
 
 void open()
 {
-  digitalWrite(LATCH_PIN_1, HIGH);
-  digitalWrite(LATCH_PIN_2, HIGH);
-  digitalWrite(BUILT_IN_LED, LOW);
-  delay(200);
-  digitalWrite(BUILT_IN_LED, HIGH);
-  digitalWrite(LATCH_PIN_1, LOW);
-  digitalWrite(LATCH_PIN_2, LOW);
+  digitalWrite(LATCH_PIN, HIGH);
+  digitalWrite(INDICATOR_LED_PIN, LOW);
+  delay(LATCH_ACTUATION_TIME_MS);
+  digitalWrite(INDICATOR_LED_PIN, HIGH);
+  digitalWrite(LATCH_PIN, LOW);
 }
 
 void update_status_led()
 {
   if (status == UNLOCKED)
   {
-    digitalWrite(BUILT_IN_LED, HIGH);
+    digitalWrite(INDICATOR_LED_PIN, HIGH);
   }
   else
   {
-    digitalWrite(BUILT_IN_LED, LOW);
+    digitalWrite(INDICATOR_LED_PIN, LOW);
   }
 }
 
@@ -246,6 +248,17 @@ bool is_base_zeroized()
   return true;
 }
 
+void flash_indicator_led_high_low(int times, int delay_ms)
+{
+  for (int x = 0; x < times; x++)
+  {
+    digitalWrite(INDICATOR_LED_PIN, HIGH);
+    delay(delay_ms);
+    digitalWrite(INDICATOR_LED_PIN, LOW);
+    delay(delay_ms);
+  }
+}
+
 // Networking
 void check_client_input()
 {
@@ -299,7 +312,7 @@ void process_data(const char *data)
     }
     else
     {
-      client.println("ERROR: Device locked");
+      client.println("ERROR: Attempted to open when not unlocked");
       Serial.println("Attempted to open when not unlocked");
     }
     break;
@@ -328,8 +341,8 @@ void process_data(const char *data)
     }
     else
     {
-      client.println("ERROR: Already locked");
-      Serial.println("Attempted to lock when not unlocked");
+      client.println("ERROR: Attempted to lock when already locked");
+      Serial.println("Attempted to lock when already locked");
     }
     break;
   case 'u':
@@ -348,6 +361,7 @@ void process_data(const char *data)
       bool isValid = check_hash_against_target();
       if (isValid)
       {
+        client.println("1");
         unlock();
       }
       else
@@ -358,29 +372,49 @@ void process_data(const char *data)
     }
     else
     {
-      client.println("1");
+      client.println("ERROR: Attempted to unlock when not locked");
       Serial.println("Attempted to unlock when not locked");
     }
     break;
   case 'b':
   case 'B':
     Serial.println("Get Base");
-    client.println(base);
+    if (status == LOCKED)
+    {
+      client.println(base);
+      Serial.print("Base is: ");
+      Serial.println(base);
+    }
+    else
+    {
+      client.println("ERROR: Attempted to get base when not locked");
+      Serial.println("Attempted to get base when not locked");
+    }
     break;
   case 't':
   case 'T':
     Serial.println("Get target");
-    for (int i = 0; i < 32; i++)
+    if (status == LOCKED)
     {
-      char str[3];
-      sprintf(str, "%02x", (int)target[i]);
-      client.print(str);
+      for (int i = 0; i < 32; i++)
+      {
+        char str[3];
+        sprintf(str, "%02x", (int)target[i]);
+        client.print(str);
+      }
+      client.print("\n");
     }
-    client.print("\n");
+    else
+    {
+      client.println("ERROR: Attempted to get target when not locked");
+      Serial.println("Attempted to get target when not locked");
+    }
     break;
   case 's':
   case 'S':
     Serial.println("Get Status");
+    Serial.print("Status: ");
+    Serial.println(status);
     client.println(status);
     break;
   default:
