@@ -9,6 +9,7 @@
 #define PORT_NUMBER 6969            // for server
 #define MAX_INPUT 66                // tcp message max length [command][target in hex (64)][\0]
 #define LATCH_ACTUATION_TIME_MS 125 // how long the latch pin is energized when opening
+#define NONCE_BYTE_SIZE 8           // rust u64 is 8 bytes
 
 #define INDICATOR_LED_PIN 21
 #define RESET_SWITCH_PIN 27
@@ -17,8 +18,8 @@
 
 static volatile bool openPressed = false;
 static volatile bool resetPressed = false;
-byte nonceBytes[4];
-byte payload[BASE_SIZE + 4];
+byte nonceBytes[NONCE_BYTE_SIZE];
+byte payload[BASE_SIZE + NONCE_BYTE_SIZE];
 byte randomValue;
 byte shaResult[32];
 byte target[32];
@@ -69,7 +70,6 @@ void setup()
   delay(100);
 
   // GPIO
-
   pinMode(RESET_SWITCH_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(RESET_SWITCH_PIN), handle_reset_interrupt, FALLING);
   pinMode(OPEN_SWITCH_PIN, INPUT_PULLUP);
@@ -225,7 +225,11 @@ void randomize_base()
   memset(base, '\0', strlen(base));
   for (int i = 0; i < BASE_SIZE; i++)
   {
-    randomValue = random(48, 122);
+    do
+    {
+      randomValue = random(48, 122);
+    } while (randomValue == 92 /* backslash */ ||
+             randomValue == 96 /* backtick */);
     base[i] = randomValue;
   }
   delay(1000);
@@ -289,6 +293,8 @@ void process_data(const char *data)
    *        EX: "L00000000ffff0000000000000000000000000000000000000000000000000000\n"
    *    Unlock (U<nonce>): Attempts to unlock the device with the given nonce
    *        The hash of base+nonce must be less than the target hash
+   *        The nonce is expressed in hexadecimal
+   *        EX: "U0b00c0008f00141a"
    *    Get Base (B): Asks for the current base
    *        Response: <base>
    *    Get target (D): Asks for the current target
@@ -348,14 +354,29 @@ void process_data(const char *data)
   case 'u':
   case 'U':
     memcpy(input_data, data + 1, MAX_INPUT - 2);
-    Serial.println("Unlock");
+    Serial.print("Unlock with: ");
     Serial.println(input_data);
     if (status == LOCKED)
     {
-      unsigned int inputNonce = atoi(input_data);
-      Serial.println("Attempting to set nonce to:");
-      Serial.println(inputNonce);
-      set_nonce(inputNonce);
+      Serial.println(strlen(input_data));
+      if (strlen(input_data) != NONCE_BYTE_SIZE * 2)
+      {
+        client.print("ERROR: Expected ");
+        client.print(NONCE_BYTE_SIZE * 2);
+        client.print(" chars to represent nonce in hex format.");
+        Serial.print("Incorrect nonce format; received: ");
+        Serial.println(input_data);
+        return;
+      }
+      for (int i = 0; i < NONCE_BYTE_SIZE; i++)
+      {
+        hex[0] = input_data[i * 2];
+        hex[1] = input_data[i * 2 + 1];
+        val = strtoul(hex, nullptr, /* BASE = */ 16);
+        nonceBytes[i] = (byte)val;
+      }
+      Serial.print("Nonce set to hex: ");
+      print_bytes_as_hex(nonceBytes, NONCE_BYTE_SIZE);
       build_payload();
       hash_payload();
       bool isValid = check_hash_against_target();
@@ -426,7 +447,7 @@ void process_data(const char *data)
   }
 }
 
-// from: http://www.gammon.com.au/serial
+// see: http://www.gammon.com.au/serial
 void process_incoming_byte(const byte inByte)
 {
   static char input_line[MAX_INPUT];
@@ -457,24 +478,6 @@ void process_incoming_byte(const byte inByte)
 }
 
 // HASHING
-/*
- * Hashing steps:
- * Set base -- ex: strcpy(base, "abcdabcd")
- * Set nonce -- set_nonce((unsigned int)4294967295)
- * Build payload -- build_payload()
- * Hash payload -- hash_payload()
- */
-
-void set_nonce(unsigned int nonce)
-{
-  nonceBytes[0] = (byte)nonce;
-  nonceBytes[1] = (byte)(nonce >> 8);
-  nonceBytes[2] = (byte)(nonce >> 16);
-  nonceBytes[3] = (byte)(nonce >> 24);
-  Serial.print("Setting nonce to hex: ");
-  print_bytes_as_hex(nonceBytes, 4);
-}
-
 void build_payload()
 {
   size_t len = BASE_SIZE;
@@ -482,7 +485,7 @@ void build_payload()
   {
     payload[i] = base[i];
   }
-  for (int j = 0; j < 4; j++)
+  for (int j = 0; j < NONCE_BYTE_SIZE; j++)
   {
     payload[j + len] = nonceBytes[j];
   }
@@ -497,7 +500,7 @@ void hash_payload()
   mbedtls_md_init(&ctx);
   mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0);
   mbedtls_md_starts(&ctx);
-  mbedtls_md_update(&ctx, (const unsigned char *)payload, BASE_SIZE + 4);
+  mbedtls_md_update(&ctx, (const unsigned char *)payload, BASE_SIZE + NONCE_BYTE_SIZE);
   mbedtls_md_finish(&ctx, shaResult);
   mbedtls_md_free(&ctx);
   print_bytes_as_hex(shaResult, sizeof(shaResult));
