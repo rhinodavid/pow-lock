@@ -4,20 +4,18 @@
 #include "secrets.h"
 
 #define EEPROM_SIZE 256
-#define BASE_SIZE 32
-#define ADDR 0                      // address to save target; base will be saved + 32
+#define BASE_SIZE 32                // number of characters in the base string
+#define ADDR 0                      // eeprom address to save target; base will be saved + 32
 #define PORT_NUMBER 6969            // for server
 #define MAX_INPUT 66                // tcp message max length [command][target in hex (64)][\0]
 #define LATCH_ACTUATION_TIME_MS 125 // how long the latch pin is energized when opening
 #define NONCE_BYTE_SIZE 8           // rust u64 is 8 bytes
 
 #define INDICATOR_LED_PIN 21
-#define RESET_SWITCH_PIN 27
-#define OPEN_SWITCH_PIN 19
+#define RESET_BUTTON_PIN 27
+#define OPEN_BUTTON_PIN 19
 #define LATCH_PIN 9
 
-static volatile bool openPressed = false;
-static volatile bool resetPressed = false;
 byte nonceBytes[NONCE_BYTE_SIZE];
 byte payload[BASE_SIZE + NONCE_BYTE_SIZE];
 byte randomValue;
@@ -25,6 +23,15 @@ byte shaResult[32];
 byte target[32];
 char base[BASE_SIZE + 1];
 char letter;
+
+// open button debouncing. see:
+// https://hackaday.com/2015/12/10/embed-with-elliot-debounce-your-noisy-buttons-part-ii/
+// https://techtutorialsx.com/2017/10/07/esp32-arduino-timer-interrupts/
+#define BUTTON_HISTORY_MASK 0b11111111000000000000111111111111
+static volatile uint32_t open_button_history = 0;
+static volatile uint32_t reset_button_history = 0;
+hw_timer_t *timer = NULL;
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
 mbedtls_md_context_t ctx;
 mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
@@ -41,16 +48,15 @@ enum Status
 
 Status status = UNKNOWN;
 
-// Interrupt handlers
-
-void IRAM_ATTR handle_reset_interrupt()
+void IRAM_ATTR update_button_history()
 {
-  resetPressed = true;
-}
+  portENTER_CRITICAL_ISR(&timerMux);
+  open_button_history = open_button_history << 1;
+  open_button_history |= digitalRead(OPEN_BUTTON_PIN) == 0;
 
-void IRAM_ATTR handle_open_interrupt()
-{
-  openPressed = true;
+  reset_button_history = reset_button_history << 1;
+  reset_button_history |= digitalRead(RESET_BUTTON_PIN) == 0;
+  portEXIT_CRITICAL_ISR(&timerMux);
 }
 
 void setup()
@@ -70,10 +76,8 @@ void setup()
   delay(100);
 
   // GPIO
-  pinMode(RESET_SWITCH_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(RESET_SWITCH_PIN), handle_reset_interrupt, FALLING);
-  pinMode(OPEN_SWITCH_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(OPEN_SWITCH_PIN), handle_open_interrupt, FALLING);
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(OPEN_BUTTON_PIN, INPUT_PULLUP);
   pinMode(LATCH_PIN, OUTPUT);
   digitalWrite(LATCH_PIN, LOW);
   pinMode(INDICATOR_LED_PIN, OUTPUT);
@@ -110,6 +114,12 @@ void setup()
     Serial.println("Starting Locked");
   }
 
+  // Open & reset button state sampler timed inturrupt
+  timer = timerBegin(0, /* scaled for 80Mhz */ 80, true);
+  timerAttachInterrupt(timer, &update_button_history, true);
+  timerAlarmWrite(timer, /* run every 100 microseconds */ 100, true);
+  timerAlarmEnable(timer);
+
   flash_indicator_led_high_low(/* times= */ 10, /* delay_ms= */ 32);
   Serial.println("Setup complete");
 }
@@ -122,11 +132,23 @@ void loop()
   check_client_input();
 }
 
+// Button handlers
+bool check_button_history(volatile uint32_t *button_history)
+{
+  if ((*button_history & BUTTON_HISTORY_MASK) == 0b00000000000000000000111111111111)
+  {
+    portENTER_CRITICAL_ISR(&timerMux);
+    *button_history = 0b11111111111111111111111111111111;
+    portEXIT_CRITICAL_ISR(&timerMux);
+    return true;
+  }
+  return false;
+}
+
 void check_open_pressed()
 {
-  if (openPressed)
+  if (check_button_history(&open_button_history))
   {
-    openPressed = false;
     if (status == UNLOCKED)
     {
       Serial.println("Open button pressed; opening");
@@ -141,9 +163,8 @@ void check_open_pressed()
 
 void check_reset_pressed()
 {
-  if (resetPressed)
+  if (check_button_history(&reset_button_history))
   {
-    resetPressed = false;
     Serial.println("Reset button pressed; unlocking/resetting");
     unlock();
   }
