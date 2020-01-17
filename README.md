@@ -4,7 +4,7 @@
 
 ![Image of the POW Lock showing the ESP32, power conditioning electronics and relay, as well as the electronic latch](pow_lock.jpg)
 
-## Physical Device
+## The Device
 
 The physical portion of the device consists of an [electronic latch](https://www.amazon.com/gp/product/B01IB3OIVO) which is opened when a current is applied to its leads. The latch is connected to a WiFi-enabled [ESP32-PICO](https://www.amazon.com/gp/product/B07Q22SD4N) microcontroller running a lightweight TCP server, along with power conditioning and isolation circuitry, plus a relay to send power to the latch to open it.
 
