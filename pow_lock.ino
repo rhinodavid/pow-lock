@@ -250,7 +250,9 @@ void randomize_base()
     {
       randomValue = random(48, 122);
     } while (randomValue == 92 /* backslash */ ||
-             randomValue == 96 /* backtick */);
+             randomValue == 96 /* backtick */ ||
+             randomValue == 59 /* semicolon */ ||
+             randomValue == 58 /* colon */);
     base[i] = randomValue;
   }
   delay(1000);
